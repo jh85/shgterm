@@ -1,0 +1,6 @@
+/shgterm
+/bin/
+/logs/
+/records/
+*.log
+.DS_Store

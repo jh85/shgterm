@@ -1,0 +1,33 @@
+# USI engine
+usi:
+  name: sample-engine
+  path: /usr/bin/true          # replace with your USI engine binary
+  options:
+    USI_Hash: {type: spin, value: 1024}
+    USI_Ponder: {type: check, value: true}
+    Threads: {type: spin, value: 1}
+    MultiPV: {type: spin, value: 1}
+  enableEarlyPonder: false
+
+# CSA server
+server:
+  protocolVersion: v121_floodgate   # or v121
+  host: wdoor.c.u-tokyo.ac.jp
+  port: 4081
+  id: YOUR_LOGIN_ID
+  password: YOUR_PASSWORD
+  tcpKeepalive:
+    initialDelay: 10
+  # Optional:
+  # blankLinePing:
+  #   initialDelay: 40
+  #   interval: 40
+
+repeat: 1
+autoRelogin: true
+restartPlayerEveryGame: false
+
+saveRecordFile: true
+enableComment: true
+recordFileNameTemplate: "{datetime}{_title}{_sente}{_gote}"
+recordFileFormat: .csa
