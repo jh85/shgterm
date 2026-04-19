@@ -59,23 +59,17 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	cfg := opts.Config
 
-	engine := usi.New(usi.Options{
-		Path:   cfg.USI.Path,
-		Name:   cfg.USI.Name,
-		Logger: engineLogger{opts.Logger},
-	})
-	if err := engine.Start(ctx); err != nil {
-		return fmt.Errorf("start engine: %w", err)
+	engine, err := startAndHandshake(ctx, cfg, opts.Logger)
+	if err != nil {
+		return err
 	}
+	// Use a closure-captured variable so the defer always sees the most
+	// recent engine (a per-game restart may replace it).
 	defer func() {
 		quitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = engine.Quit(quitCtx)
 	}()
-
-	if err := engine.Handshake(ctx, usiOptionMap(cfg.USI.Options)); err != nil {
-		return fmt.Errorf("handshake: %w", err)
-	}
 	opts.UI.SetEngine(engine.IDName(), engine.IDAuthor())
 
 	infinite := cfg.Repeat == -1
@@ -91,7 +85,7 @@ func Run(ctx context.Context, opts Options) error {
 		if infinite {
 			budget = -1
 		}
-		played, err := runOneSession(ctx, opts, engine, budget)
+		played, err := runOneSession(ctx, opts, &engine, budget)
 		if !infinite {
 			remaining -= played
 		}
@@ -119,7 +113,9 @@ func Run(ctx context.Context, opts Options) error {
 
 // runOneSession logs in, plays up to 'budget' games, then logs out. Returns
 // the number of games actually played and the terminating error (if any).
-func runOneSession(ctx context.Context, opts Options, engine *usi.Engine, budget int) (played int, err error) {
+// enginePtr is a pointer to the current engine pointer so the per-game
+// restart path can replace it in place.
+func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, budget int) (played int, err error) {
 	cfg := opts.Config
 	client := csa.New(csa.Options{
 		Host:        cfg.Server.Host,
@@ -161,7 +157,7 @@ func runOneSession(ctx context.Context, opts Options, engine *usi.Engine, budget
 		if err != nil {
 			return played, err
 		}
-		res, err := playOneGame(ctx, opts, engine, client, summary)
+		res, err := playOneGame(ctx, opts, *enginePtr, client, summary)
 		if err != nil {
 			return played, err
 		}
@@ -173,11 +169,63 @@ func runOneSession(ctx context.Context, opts Options, engine *usi.Engine, budget
 				opts.UI.LogLine("warn", fmt.Sprintf("save record: %v", err))
 			}
 		}
+
+		// Restart the engine between games if configured. Unlike
+		// ShogiHome we do NOT reconnect to CSA — keeping the login alive
+		// is important for Floodgate, which pushes successive Game_Summary
+		// blocks on the same session. Skip restart before the final game
+		// of a finite budget to avoid wasting the teardown+NN-load cost.
+		if cfg.RestartPlayerEveryGame {
+			last := !infinite && played >= budget
+			if !last {
+				opts.UI.LogLine("info", "restarting engine (restartPlayerEveryGame=true)…")
+				newEngine, err := restartEngine(ctx, *enginePtr, cfg, opts.Logger)
+				if err != nil {
+					return played, fmt.Errorf("restart engine: %w", err)
+				}
+				*enginePtr = newEngine
+				opts.UI.SetEngine(newEngine.IDName(), newEngine.IDAuthor())
+				opts.UI.LogLine("info", fmt.Sprintf("engine restarted: %s", newEngine.IDName()))
+			}
+		}
 	}
 	if err := client.Logout(); err != nil {
 		opts.Logger.Warn("logout: %v", err)
 	}
 	return played, nil
+}
+
+// startAndHandshake spawns the engine process and performs the full USI
+// handshake (usi → usiok → setoption… → isready → readyok). On any error
+// after Start, the partially-started process is torn down.
+func startAndHandshake(ctx context.Context, cfg *config.Config, log Logger) (*usi.Engine, error) {
+	engine := usi.New(usi.Options{
+		Path:   cfg.USI.Path,
+		Name:   cfg.USI.Name,
+		Logger: engineLogger{log},
+	})
+	if err := engine.Start(ctx); err != nil {
+		return nil, fmt.Errorf("start engine: %w", err)
+	}
+	if err := engine.Handshake(ctx, usiOptionMap(cfg.USI.Options)); err != nil {
+		quitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = engine.Quit(quitCtx)
+		return nil, fmt.Errorf("handshake: %w", err)
+	}
+	return engine, nil
+}
+
+// restartEngine tears down the supplied engine and replaces it with a
+// freshly-started one. The old engine is always torn down before we try
+// to build a new one so we don't end up with two live NN workers.
+func restartEngine(ctx context.Context, old *usi.Engine, cfg *config.Config, log Logger) (*usi.Engine, error) {
+	quitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := old.Quit(quitCtx); err != nil {
+		log.Warn("old engine quit: %v", err)
+	}
+	return startAndHandshake(ctx, cfg, log)
 }
 
 // waitForGameSummary waits for LOGIN_OK (once) then EventGameSummary.
