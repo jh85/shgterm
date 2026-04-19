@@ -81,6 +81,30 @@ func TestLoadJSON(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsRepeatMinusOne(t *testing.T) {
+	c := &Config{
+		USI:    USIEngine{Path: "/bin/sh"},
+		Server: Server{ProtocolVersion: ProtocolV121, Host: "h", Port: 4081, ID: "i", TCPKeepalive: TCPKeepalive{InitialDelay: 10}},
+		Repeat: -1,
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("repeat=-1 should be valid: %v", err)
+	}
+}
+
+func TestValidateRejectsRepeatZero(t *testing.T) {
+	c := &Config{
+		USI:    USIEngine{Path: "/bin/sh"},
+		Server: Server{ProtocolVersion: ProtocolV121, Host: "h", Port: 4081, ID: "i", TCPKeepalive: TCPKeepalive{InitialDelay: 10}},
+		Repeat: 0,
+	}
+	// repeat=0 should only appear before applyDefaults; validation requires
+	// either >=1 or -1.
+	if err := c.Validate(); err == nil {
+		t.Fatal("repeat=0 should fail validation (must go through defaults first)")
+	}
+}
+
 func TestValidateRejectsBadProtocol(t *testing.T) {
 	c := &Config{
 		USI:    USIEngine{Path: "/bin/sh"},

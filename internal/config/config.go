@@ -178,8 +178,11 @@ func (c *Config) Validate() error {
 			return err
 		}
 	}
-	if c.Repeat < 1 {
-		return fmt.Errorf("repeat must be >= 1 (got %d)", c.Repeat)
+	// repeat: N ≥ 1 plays exactly N games; -1 means "no limit" — stay
+	// logged in and keep waiting for new Game_Summary blocks until the
+	// user quits (used for Floodgate, which schedules games every 30 min).
+	if c.Repeat != -1 && c.Repeat < 1 {
+		return fmt.Errorf("repeat must be -1 (infinite) or >= 1 (got %d)", c.Repeat)
 	}
 	for name, opt := range c.USI.Options {
 		switch opt.Type {

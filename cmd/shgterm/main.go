@@ -45,7 +45,8 @@ func run() error {
 	id := flags.String("id", "", "override selected server.id")
 	password := flags.String("password", "", "override selected server.password")
 	proto := flags.String("protocol", "", "override selected server.protocolVersion (v121|v121_floodgate)")
-	repeat := flags.Int("repeat", 0, "override repeat count")
+	repeat := flags.Int("repeat", 0, "override repeat count (-1 = infinite; stay logged in and play every scheduled game)")
+	continuous := flags.Bool("continuous", false, "shortcut for --repeat -1 (Floodgate / tournament mode)")
 	logDir := flags.String("log-dir", "logs", "directory for log files (empty disables file logging)")
 	recordDir := flags.String("record-dir", "records", "directory for saved game records")
 	ascii := flags.Bool("ascii", false, "render pieces as USI ASCII instead of kanji")
@@ -91,6 +92,9 @@ func run() error {
 	if selected != "" {
 		fmt.Fprintf(os.Stderr, "shgterm: using server %q (%s:%d, %s)\n",
 			selected, cfg.Server.Host, cfg.Server.Port, cfg.Server.ProtocolVersion)
+	}
+	if *continuous {
+		*repeat = -1
 	}
 	applyOverrides(cfg, *host, *port, *id, *password, *proto, *repeat)
 	if err := cfg.Validate(); err != nil {

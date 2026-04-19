@@ -78,17 +78,30 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	opts.UI.SetEngine(engine.IDName(), engine.IDAuthor())
 
+	infinite := cfg.Repeat == -1
 	remaining := cfg.Repeat
-	for remaining > 0 {
+	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		played, err := runOneSession(ctx, opts, engine, remaining)
-		remaining -= played
+		if !infinite && remaining <= 0 {
+			return nil
+		}
+		budget := remaining
+		if infinite {
+			budget = -1
+		}
+		played, err := runOneSession(ctx, opts, engine, budget)
+		if !infinite {
+			remaining -= played
+		}
 		if err != nil {
 			opts.Logger.Warn("session error: %v", err)
 			opts.UI.LogLine("warn", fmt.Sprintf("session error: %v", err))
-			if !cfg.AutoRelogin || remaining <= 0 {
+			if !cfg.AutoRelogin {
+				return err
+			}
+			if !infinite && remaining <= 0 {
 				return err
 			}
 			opts.UI.LogLine("info", fmt.Sprintf("retrying in %v", opts.LoginRetryDelay))
@@ -99,8 +112,9 @@ func Run(ctx context.Context, opts Options) error {
 			}
 			continue
 		}
+		// Normal return only happens when budget is reached; infinite
+		// mode only returns here if ctx was cancelled (checked at top).
 	}
-	return nil
 }
 
 // runOneSession logs in, plays up to 'budget' games, then logs out. Returns
@@ -128,9 +142,20 @@ func runOneSession(ctx context.Context, opts Options, engine *usi.Engine, budget
 	}
 	defer client.Close()
 
-	for played < budget {
+	infinite := budget < 0
+	for {
 		if err := ctx.Err(); err != nil {
 			return played, err
+		}
+		if !infinite && played >= budget {
+			break
+		}
+		// Between games (Floodgate schedules roughly every 30 minutes;
+		// tournaments can be hours apart). We stay logged in and block
+		// on the next Game_Summary. TCP keepalive + optional blank-line
+		// ping keep the connection alive while we wait.
+		if played > 0 {
+			opts.UI.LogLine("info", "waiting for next game…")
 		}
 		summary, err := waitForGameSummary(ctx, client)
 		if err != nil {
