@@ -91,14 +91,18 @@ func Run(ctx context.Context, opts Options) error {
 		}
 		if err != nil {
 			opts.Logger.Warn("session error: %v", err)
-			opts.UI.LogLine("warn", fmt.Sprintf("session error: %v", err))
 			if !cfg.AutoRelogin {
+				opts.UI.LogLine("warn", fmt.Sprintf("session error: %v", err))
 				return err
 			}
 			if !infinite && remaining <= 0 {
+				opts.UI.LogLine("warn", fmt.Sprintf("session error: %v", err))
 				return err
 			}
-			opts.UI.LogLine("info", fmt.Sprintf("retrying in %v", opts.LoginRetryDelay))
+			// A post-game disconnect is normal on v121 tournament servers;
+			// demote the user-visible message and just announce the retry.
+			opts.UI.LogLine("info",
+				fmt.Sprintf("reconnecting in %v (press q to quit)", opts.LoginRetryDelay))
 			select {
 			case <-time.After(opts.LoginRetryDelay):
 			case <-ctx.Done():
@@ -157,12 +161,31 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 		if err != nil {
 			return played, err
 		}
+		// Game starting. Announce at info level so the log pane has a
+		// clear marker for each game.
+		mySide := "先手"
+		oppName := summary.Players[csa.White].Name
+		if summary.MyColor == csa.White {
+			mySide = "後手"
+			oppName = summary.Players[csa.Black].Name
+		}
+		if oppName == "" {
+			oppName = "(unknown)"
+		}
+		opts.UI.LogLine("info", fmt.Sprintf("game %d started: %s, 相手 %s (id=%s)",
+			played+1, mySide, oppName, summary.ID))
+
 		res, err := playOneGame(ctx, opts, *enginePtr, client, summary)
 		if err != nil {
 			return played, err
 		}
 		played++
 		opts.UI.GameEnded(res.result, res.special)
+		endLabel := res.result
+		if res.special != "" {
+			endLabel = res.result + " (" + res.special + ")"
+		}
+		opts.UI.LogLine("info", fmt.Sprintf("game %d ended: %s", played, endLabel))
 		if cfg.SaveRecordFile {
 			if err := saveRecord(opts.RecordDir, cfg, summary, res); err != nil {
 				opts.Logger.Warn("save record: %v", err)

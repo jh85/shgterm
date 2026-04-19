@@ -37,6 +37,11 @@ type Model struct {
 	Summary *csa.GameSummary
 	MyColor csa.PlayerColor
 
+	// GameStartedAt is the wall-clock time we first learned about the
+	// current game (i.e., Game_Summary arrival). Used for the "start:"
+	// field in the status bar.
+	GameStartedAt time.Time
+
 	// Position snapshot + last move.
 	Position    *shogi.Position
 	LastMoveCSA string

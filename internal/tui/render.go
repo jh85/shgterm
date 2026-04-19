@@ -114,24 +114,22 @@ func (t *TUI) drawTitleBar(w int) {
 func (t *TUI) drawStatusBar(w int) {
 	t.model.mu.Lock()
 	defer t.model.mu.Unlock()
-	left := ""
-	if t.model.EngineName != "" {
-		if t.model.EngineAuthor != "" {
-			left = fmt.Sprintf("engine: %s by %s", t.model.EngineName, t.model.EngineAuthor)
-		} else {
-			left = fmt.Sprintf("engine: %s", t.model.EngineName)
+	eng := truncate(t.model.EngineName, 12)
+	gameID := "-"
+	startStr := "-"
+	if s := t.model.Summary; s != nil {
+		if s.ID != "" {
+			gameID = truncate(s.ID, 16)
 		}
 	}
-	right := ""
-	if s := t.model.Summary; s != nil {
-		right = fmt.Sprintf("game: %s  state: %s", s.ID, t.gameStateLabel())
+	if !t.model.GameStartedAt.IsZero() {
+		startStr = t.model.GameStartedAt.Format("15:04:05")
 	}
+	line := fmt.Sprintf("engine: %-12s  game: %-16s  start: %-8s  state: %s",
+		eng, gameID, startStr, t.gameStateLabel())
 	row := 1
 	t.clearRect(1, row, w-2, 1)
-	t.putText(2, row, styleDefault, left)
-	if len(right) > 0 {
-		t.putText(w-2-asciiLen(right), row, styleDefault, right)
-	}
+	t.putText(2, row, styleDefault, truncate(line, w-4))
 	// Row 2 is a light divider inside the frame.
 	t.hfill(1, 2, w-2, styleBorder, '─')
 	t.screen.SetContent(0, 2, '├', nil, styleBorder)
@@ -379,16 +377,24 @@ func (t *TUI) drawRightPane(x, y, w int) {
 		}
 		return n
 	}
-	// Live-clock subtraction: only the side-to-move's clock counts down.
+	// Remaining is the stored value (updated only at turn boundaries).
+	// Consumed-this-turn only renders for the side currently on move.
 	remaining := func(side csa.PlayerColor, stored int64) time.Duration {
 		d := time.Duration(stored) * unit
-		if !turnStart.IsZero() && side == turnSide {
-			d -= time.Since(turnStart)
-		}
 		if d < 0 {
 			d = 0
 		}
 		return d
+	}
+	consumed := func(side csa.PlayerColor) (time.Duration, bool) {
+		if turnStart.IsZero() || side != turnSide {
+			return 0, false
+		}
+		d := time.Since(turnStart)
+		if d < 0 {
+			d = 0
+		}
+		return d, true
 	}
 	onMoveBlack := pos != nil && pos.Turn == shogi.Black
 	onMoveWhite := pos != nil && pos.Turn == shogi.White
@@ -407,17 +413,19 @@ func (t *TUI) drawRightPane(x, y, w int) {
 		}
 		return base
 	}
+	row2 := func(label string, color csa.PlayerColor, onMove bool, base tcell.Style, stored int64) {
+		line := fmt.Sprintf("%s%s %-12s  %s",
+			prefix(onMove), label, truncate(name(color), 12), formatDur(remaining(color, stored)))
+		if d, ok := consumed(color); ok {
+			line += fmt.Sprintf("  (+%s)", formatDur(d))
+		}
+		t.putRunes(x, row, style(base, onMove), line)
+	}
 	// 先手 (Black, yellow).
-	t.putRunes(x, row, style(styleBlack, onMoveBlack),
-		fmt.Sprintf("%s先手 %-14s %s %s",
-			prefix(onMoveBlack), truncate(name(csa.Black), 14),
-			formatDur(remaining(csa.Black, cb)), formatExtra(summary, csa.Black)))
+	row2("先手", csa.Black, onMoveBlack, styleBlack, cb)
 	row++
 	// 後手 (White, default).
-	t.putRunes(x, row, style(styleWhite, onMoveWhite),
-		fmt.Sprintf("%s後手 %-14s %s %s",
-			prefix(onMoveWhite), truncate(name(csa.White), 14),
-			formatDur(remaining(csa.White, cw)), formatExtra(summary, csa.White)))
+	row2("後手", csa.White, onMoveWhite, styleWhite, cw)
 	row += 2
 
 	t.putText(x, row, styleTitle, "Last move")
@@ -460,18 +468,20 @@ func (t *TUI) drawRightPane(x, y, w int) {
 	}
 	row++
 
-	t.putText(x, row, styleTitle, "Game")
+	t.putText(x, row, styleTitle, "Time control")
 	row++
 	if summary != nil {
-		t.putText(x, row, styleDefault, fmt.Sprintf("  id=%s", summary.ID))
+		tc := summary.Players[csa.Black].Time
+		totalDur := time.Duration(tc.TotalTimeUnits) * unit
+		byoDur := time.Duration(tc.ByoyomiUnits) * unit
+		incDur := time.Duration(tc.IncrementUnits) * unit
+		// These lines mix wide kanji (2 cells each) with ASCII — use
+		// putRunes so each wide rune occupies 2 grid cells correctly.
+		t.putRunes(x, row, styleDefault, fmt.Sprintf("  持ち時間: %s", formatDur(totalDur)))
 		row++
-		t.putText(x, row, styleDefault, fmt.Sprintf("  protocol=%s", summary.ProtocolVersion))
+		t.putRunes(x, row, styleDefault, fmt.Sprintf("  秒読み:   %s", formatSeconds(byoDur)))
 		row++
-		byo := summary.Players[csa.Black].Time.ByoyomiUnits
-		inc := summary.Players[csa.Black].Time.IncrementUnits
-		total := summary.Players[csa.Black].Time.TotalTimeUnits
-		t.putText(x, row, styleDefault, fmt.Sprintf("  total=%d × %v   byo=%d   inc=%d",
-			total, unit, byo, inc))
+		t.putRunes(x, row, styleDefault, fmt.Sprintf("  加算:     %s", formatSeconds(incDur)))
 		row++
 	}
 	if ended != "" {

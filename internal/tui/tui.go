@@ -199,6 +199,7 @@ func (t *TUI) SetGame(summary *csa.GameSummary, my csa.PlayerColor) {
 	t.model.mu.Lock()
 	t.model.Summary = summary
 	t.model.MyColor = my
+	t.model.GameStartedAt = time.Now()
 	// Flip is controlled only by the --flip CLI flag. By default the
 	// board is rendered in the standard orientation with Black at the
 	// bottom regardless of which side the engine plays.
@@ -375,6 +376,15 @@ func formatDur(d time.Duration) string {
 		return fmt.Sprintf("%d:%02d:%02d", h, m, s)
 	}
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+// formatSeconds renders a short duration in seconds as "10s" (or "0s" for
+// zero). Used for byoyomi / increment hints.
+func formatSeconds(d time.Duration) string {
+	if d <= 0 {
+		return "0s"
+	}
+	return fmt.Sprintf("%ds", int(d/time.Second))
 }
 
 // formatExtra renders byoyomi/increment hint, e.g. "+ 00:10" (byoyomi) or "+ +5s".

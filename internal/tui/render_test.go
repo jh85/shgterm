@@ -70,7 +70,9 @@ func TestRenderStartPosition(t *testing.T) {
 
 	for _, needle := range []string{
 		"shgterm",
-		"engine: FakeEngine by bench",
+		"engine: FakeEngine",
+		"game: test-abc",
+		"state: playing",
 		"Clock",
 		"先手",
 		"後手",
@@ -78,8 +80,8 @@ func TestRenderStartPosition(t *testing.T) {
 		"bob",
 		"Engine PV",
 		"+420cp",
-		"Game",
-		"id=test-abc",
+		"Time control",
+		"持ち時間",
 		"LOGIN ok",
 		"engine handshake ok",
 	} {

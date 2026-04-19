@@ -47,6 +47,7 @@ func run() error {
 	proto := flags.String("protocol", "", "override selected server.protocolVersion (v121|v121_floodgate)")
 	repeat := flags.Int("repeat", 0, "override repeat count (-1 = infinite; stay logged in and play every scheduled game)")
 	continuous := flags.Bool("continuous", false, "shortcut for --repeat -1 (Floodgate / tournament mode)")
+	loginRetry := flags.Duration("login-retry", 30*time.Second, "delay before reconnecting after a session error (try 5s for v121 tournaments)")
 	logDir := flags.String("log-dir", "logs", "directory for log files (empty disables file logging)")
 	recordDir := flags.String("record-dir", "records", "directory for saved game records")
 	ascii := flags.Bool("ascii", false, "render pieces as USI ASCII instead of kanji")
@@ -123,9 +124,10 @@ func run() error {
 	)
 
 	opts := bridge.Options{
-		Config:    cfg,
-		Logger:    slogAdapter{logger},
-		RecordDir: *recordDir,
+		Config:          cfg,
+		Logger:          slogAdapter{logger},
+		RecordDir:       *recordDir,
+		LoginRetryDelay: *loginRetry,
 	}
 
 	if *noTUI {
