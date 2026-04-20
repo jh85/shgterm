@@ -377,7 +377,7 @@ func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *
 		}
 
 		// Await next event from server (our echo, opponent, or end).
-		done, err := awaitMoveOrEnd(ctx, client, pos, &usiMoves, &res, clock, unit, opts.UI)
+		done, err := awaitMoveOrEnd(ctx, client, pos, &usiMoves, &res, &clock, unit, opts.UI)
 		if err != nil {
 			return res, err
 		}
@@ -482,15 +482,16 @@ func engineThink(
 
 // awaitMoveOrEnd blocks until a move echo or a game-ending event. When a
 // move arrives (ours or opponent's), it applies it to pos, appends USI
-// string, updates clock, and returns (false, nil). On game end, returns
-// (true, nil) with res populated.
+// string, updates clock (in place via the pointer — the caller relies on
+// the mutation), and returns (false, nil). On game end returns (true, nil)
+// with res populated.
 func awaitMoveOrEnd(
 	ctx context.Context,
 	client *csa.Client,
 	pos *shogi.Position,
 	usiMoves *[]string,
 	res *gameResult,
-	clock [2]int64,
+	clock *[2]int64,
 	unit time.Duration,
 	ui UI,
 ) (bool, error) {
