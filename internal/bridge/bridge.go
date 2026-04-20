@@ -162,18 +162,20 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 			return played, err
 		}
 		// Game starting. Announce at info level so the log pane has a
-		// clear marker for each game.
-		mySide := "先手"
-		oppName := summary.Players[csa.White].Name
-		if summary.MyColor == csa.White {
-			mySide = "後手"
-			oppName = summary.Players[csa.Black].Name
+		// clear marker for each game. Use ☗ (Black) / ☖ (White) piece
+		// symbols so the line stays short and readable in ASCII locales;
+		// game ID is truncated to 10 runes since Floodgate and WCSC IDs
+		// can be very long.
+		blackName := summary.Players[csa.Black].Name
+		whiteName := summary.Players[csa.White].Name
+		if blackName == "" {
+			blackName = "-"
 		}
-		if oppName == "" {
-			oppName = "(unknown)"
+		if whiteName == "" {
+			whiteName = "-"
 		}
-		opts.UI.LogLine("info", fmt.Sprintf("game %d started: %s, 相手 %s (id=%s)",
-			played+1, mySide, oppName, summary.ID))
+		opts.UI.LogLine("info", fmt.Sprintf("game %d started: ☗ %s  ☖ %s (id=%s)",
+			played+1, blackName, whiteName, truncateRunes(summary.ID, 10)))
 
 		res, err := playOneGame(ctx, opts, *enginePtr, client, summary)
 		if err != nil {
@@ -660,6 +662,22 @@ var timeTailRe = regexp.MustCompile(`,T[0-9]+$`)
 
 func stripTime(line string) string {
 	return timeTailRe.ReplaceAllString(line, "")
+}
+
+// truncateRunes returns the first n runes of s, preserving UTF-8 integrity.
+// (Plain s[:n] slicing could cut a multi-byte sequence in half.)
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	i := 0
+	for j := range s {
+		if i == n {
+			return s[:j]
+		}
+		i++
+	}
+	return s
 }
 
 func saveRecord(dir string, cfg *config.Config, s *csa.GameSummary, r gameResult) error {
