@@ -21,9 +21,14 @@ type Record struct {
 	ByoyomiSec    int64
 	InitialCSAPos string   // CSA position block (the Game_Summary Position body)
 	MoveLines     []string // e.g. "+7776FU,T10" + optional "'* 42 7g7f 3c3d"
-	Terminator    string   // "%TORYO", "%KACHI", "#RESIGN", "#WIN", ...
-	Comments      []string // optional top-of-file "'" comments
-	ReturnCode    string   // "\n" (default) or "\r\n"
+	// MoveTimestamps is optional; when present and non-zero at index i it
+	// is emitted as an "'$TIME:<rfc3339>" comment immediately after the
+	// move line at MoveLines[i]. Length may be shorter than MoveLines
+	// (trailing terminator entries like "#RESIGN" get no timestamp).
+	MoveTimestamps []time.Time
+	Terminator     string   // "%TORYO", "%KACHI", "#RESIGN", "#WIN", ...
+	Comments       []string // optional top-of-file "'" comments
+	ReturnCode     string   // "\n" (default) or "\r\n"
 }
 
 // DefaultReturnCode is the platform-normal line ending.
@@ -67,8 +72,11 @@ func FormatCSA(r Record) []byte {
 	for _, line := range strings.Split(ipos, "\n") {
 		write(line)
 	}
-	for _, ml := range r.MoveLines {
+	for i, ml := range r.MoveLines {
 		write(ml)
+		if i < len(r.MoveTimestamps) && !r.MoveTimestamps[i].IsZero() {
+			write("'$TIME:" + r.MoveTimestamps[i].Format(time.RFC3339))
+		}
 	}
 	if r.Terminator != "" {
 		write(r.Terminator)

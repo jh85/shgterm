@@ -279,14 +279,15 @@ func waitForGameSummary(ctx context.Context, client *csa.Client) (*csa.GameSumma
 }
 
 type gameResult struct {
-	result      string // "#WIN"/"#LOSE"/"#DRAW"/"#CENSORED"/"#CHUDAN"
-	special     string // "#RESIGN" / "#TIME_UP" / ...
-	moveLines   []string
-	terminator  string
-	startedAt   time.Time
-	endedAt     time.Time
-	initialPos  string
-	summary     *csa.GameSummary
+	result         string // "#WIN"/"#LOSE"/"#DRAW"/"#CENSORED"/"#CHUDAN"
+	special        string // "#RESIGN" / "#TIME_UP" / ...
+	moveLines      []string
+	moveTimestamps []time.Time // wall-clock time each EventMove was received
+	terminator     string
+	startedAt      time.Time
+	endedAt        time.Time
+	initialPos     string
+	summary        *csa.GameSummary
 }
 
 // playOneGame drives one agreed game end-to-end. Returns once the server
@@ -513,6 +514,7 @@ func awaitMoveOrEnd(
 				}
 				*usiMoves = append(*usiMoves, usiStr)
 				res.moveLines = append(res.moveLines, ev.Move)
+				res.moveTimestamps = append(res.moveTimestamps, time.Now())
 				// Update clock: subtract elapsed from the mover.
 				mover := ev.Color
 				clock[mover] -= ev.ElapsedUnits
@@ -682,14 +684,15 @@ func truncateRunes(s string, n int) string {
 
 func saveRecord(dir string, cfg *config.Config, s *csa.GameSummary, r gameResult) error {
 	rec := kifu.Record{
-		GameID:        s.ID,
-		BlackName:     s.Players[csa.Black].Name,
-		WhiteName:     s.Players[csa.White].Name,
-		StartedAt:     r.startedAt,
-		EndedAt:       r.endedAt,
-		InitialCSAPos: r.initialPos,
-		MoveLines:     r.moveLines,
-		Terminator:    r.result,
+		GameID:         s.ID,
+		BlackName:      s.Players[csa.Black].Name,
+		WhiteName:      s.Players[csa.White].Name,
+		StartedAt:      r.startedAt,
+		EndedAt:        r.endedAt,
+		InitialCSAPos:  r.initialPos,
+		MoveLines:      r.moveLines,
+		MoveTimestamps: r.moveTimestamps,
+		Terminator:     r.result,
 	}
 	unit := s.Players[csa.Black].Time.TimeUnit
 	if unit == 0 {

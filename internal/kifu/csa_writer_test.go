@@ -35,6 +35,52 @@ func TestFormatCSA(t *testing.T) {
 	}
 }
 
+func TestFormatCSAWithMoveTimestamps(t *testing.T) {
+	t0 := time.Date(2026, 4, 20, 10, 30, 0, 0, time.UTC)
+	t1 := t0.Add(12 * time.Second)
+	r := Record{
+		BlackName:     "alice",
+		WhiteName:     "bob",
+		StartedAt:     t0,
+		InitialCSAPos: "PI\n+\n",
+		MoveLines: []string{
+			"+7776FU,T10",
+			"-3334FU,T8",
+			"#RESIGN",
+		},
+		MoveTimestamps: []time.Time{
+			t0,                          // move 1
+			t1,                          // move 2
+			{},                          // #RESIGN gets no timestamp
+		},
+		Terminator: "%TORYO",
+	}
+	out := string(FormatCSA(r))
+	// Each of the first two moves must be followed by a $TIME comment.
+	lines := strings.Split(out, "\n")
+	var foundMove1Time, foundMove2Time bool
+	for i, ln := range lines {
+		if ln == "+7776FU,T10" && i+1 < len(lines) &&
+			strings.HasPrefix(lines[i+1], "'$TIME:2026-04-20T10:30:00") {
+			foundMove1Time = true
+		}
+		if ln == "-3334FU,T8" && i+1 < len(lines) &&
+			strings.HasPrefix(lines[i+1], "'$TIME:2026-04-20T10:30:12") {
+			foundMove2Time = true
+		}
+	}
+	if !foundMove1Time {
+		t.Errorf("missing $TIME after move 1:\n%s", out)
+	}
+	if !foundMove2Time {
+		t.Errorf("missing $TIME after move 2:\n%s", out)
+	}
+	// #RESIGN should not have a $TIME appended because its timestamp is zero.
+	if strings.Contains(out, "#RESIGN\n'$TIME:") {
+		t.Errorf("#RESIGN should not carry a timestamp:\n%s", out)
+	}
+}
+
 func TestRenderFilenameSanitizes(t *testing.T) {
 	r := Record{GameID: "evil/name", BlackName: "a", WhiteName: "b",
 		StartedAt: time.Date(2026, 4, 18, 10, 0, 0, 0, time.UTC)}
