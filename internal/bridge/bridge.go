@@ -344,35 +344,56 @@ func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *
 	// Main alternating loop.
 	for {
 		if pos.Turn == colorToShogi(summary.MyColor) {
-			// Our turn: ask the engine for a move.
-			decision, err := engineThink(ctx, engine, pos, usiMoves, summary, clock, opts.UI)
+			// Our turn: ask the engine for a move. engineThink also
+			// watches the CSA stream for a game-end event so we don't
+			// miss e.g. #SENNICHITE/#DRAW arriving while the engine is
+			// still thinking.
+			decision, err := engineThink(ctx, engine, client, pos, usiMoves, summary, clock, opts.UI)
 			if err != nil {
 				return res, err
 			}
-			switch {
-			case decision.declareWin:
-				if err := client.DeclareWin(); err != nil {
-					return res, err
+			if decision.gameEnded {
+				// Record what engineThink already consumed from the CSA
+				// stream; awaitMoveOrEnd below will pick up whatever
+				// termination event is still pending (SpecialMove or
+				// Result — whichever hasn't arrived yet).
+				if decision.csaSpecialMove != "" {
+					res.special = decision.csaSpecialMove
+					res.moveLines = append(res.moveLines, decision.csaSpecialMove)
 				}
-				res.terminator = "%KACHI"
-			case decision.resign:
-				if err := client.Resign(); err != nil {
-					return res, err
+				if decision.csaResult != "" {
+					res.result = decision.csaResult
+					res.endedAt = time.Now()
+					_ = engine.Gameover(mapGameResultForEngine(res.result, summary.MyColor))
+					return res, nil
 				}
-				res.terminator = "%TORYO"
-			default:
-				csaLine, err := pos.MoveToCSA(*decision.move, pos.Turn)
-				if err != nil {
-					return res, fmt.Errorf("convert bestmove: %w", err)
+				// Fall through to awaitMoveOrEnd for the pending Result.
+			} else {
+				switch {
+				case decision.declareWin:
+					if err := client.DeclareWin(); err != nil {
+						return res, err
+					}
+					res.terminator = "%KACHI"
+				case decision.resign:
+					if err := client.Resign(); err != nil {
+						return res, err
+					}
+					res.terminator = "%TORYO"
+				default:
+					csaLine, err := pos.MoveToCSA(*decision.move, pos.Turn)
+					if err != nil {
+						return res, fmt.Errorf("convert bestmove: %w", err)
+					}
+					comment := ""
+					if opts.Config.EnableComment && opts.Config.IsFloodgateProtocol() {
+						comment = buildComment(decision.info)
+					}
+					if err := client.SendMove(csaLine, comment); err != nil {
+						return res, err
+					}
+					// Apply locally on server echo — do nothing here.
 				}
-				comment := ""
-				if opts.Config.EnableComment && opts.Config.IsFloodgateProtocol() {
-					comment = buildComment(decision.info)
-				}
-				if err := client.SendMove(csaLine, comment); err != nil {
-					return res, err
-				}
-				// Apply locally on server echo — do nothing here.
 			}
 		}
 
@@ -413,21 +434,34 @@ func waitForStart(ctx context.Context, client *csa.Client) error {
 	}
 }
 
-// engineDecision is engineThink's result. Exactly one of move/resign/
-// declareWin is set when err == nil.
+// engineDecision is engineThink's result. When err == nil exactly one of
+// move / resign / declareWin / gameEnded is set. gameEnded signals that a
+// game-terminating CSA event (EventSpecialMove or EventResult) arrived
+// while the engine was thinking; caller must NOT try to SendMove and
+// should fold csaSpecialMove / csaResult into the gameResult.
 type engineDecision struct {
 	move       *shogi.Move
 	resign     bool
 	declareWin bool
 	info       *usi.Info
+
+	gameEnded      bool
+	csaSpecialMove string // "#SENNICHITE", "#TIME_UP", etc. — may be empty
+	csaResult      string // "#WIN"/"#LOSE"/"#DRAW"/"#CENSORED"/"#CHUDAN" — may be empty
 }
 
-// engineThink asks the engine for a move. It maps USI "bestmove resign"
-// and empty bestmove to resign=true, and USI "bestmove win" to
-// declareWin=true (to be answered with CSA %KACHI).
+// engineThink asks the engine for a move while also watching the CSA
+// stream for a game-end event. If the server sends SENNICHITE / a result
+// code / a connection close while we're waiting, we Stop() the engine,
+// drain its output, and return a gameEnded decision so the caller can
+// finalize the game cleanly (no SendMove race against StateWaitingGameSummary).
+//
+// USI "bestmove resign"/empty maps to resign=true; "bestmove win" maps to
+// declareWin=true (answered with CSA %KACHI).
 func engineThink(
 	ctx context.Context,
 	engine *usi.Engine,
+	client *csa.Client,
 	pos *shogi.Position,
 	usiMoves []string,
 	summary *csa.GameSummary,
@@ -439,6 +473,15 @@ func engineThink(
 	ch, err := engine.Go(ctx, positionCmd, tc)
 	if err != nil {
 		return engineDecision{}, err
+	}
+	csaCh := client.Events()
+
+	// abort stops the engine and drains its output channel to the close
+	// that follows the bestmove triggered by Stop().
+	abort := func() {
+		_ = engine.Stop()
+		for range ch {
+		}
 	}
 
 	var lastInfo *usi.Info
@@ -469,12 +512,41 @@ func engineThink(
 				}
 				return engineDecision{move: &m, info: lastInfo}, nil
 			}
-		case <-ctx.Done():
-			_ = engine.Stop()
-			// drain until bestmove or error
-			for ev := range ch {
-				_ = ev
+		case csaEv, ok := <-csaCh:
+			if !ok {
+				abort()
+				return engineDecision{info: lastInfo}, errors.New("csa stream closed during engine think")
 			}
+			switch csaEv.Kind {
+			case csa.EventSpecialMove:
+				// Record and abort; the Result line will arrive next and
+				// awaitMoveOrEnd picks it up after we return.
+				abort()
+				return engineDecision{
+					gameEnded:      true,
+					csaSpecialMove: csaEv.Special,
+					info:           lastInfo,
+				}, nil
+			case csa.EventResult:
+				abort()
+				return engineDecision{
+					gameEnded: true,
+					csaResult: csaEv.Result,
+					info:      lastInfo,
+				}, nil
+			case csa.EventError:
+				abort()
+				return engineDecision{info: lastInfo}, csaEv.Err
+			case csa.EventClosed:
+				abort()
+				return engineDecision{info: lastInfo}, errors.New("csa closed during engine think")
+			case csa.EventMove:
+				// Shouldn't happen while it's our turn, but log and keep
+				// thinking rather than silently dropping it.
+				ui.LogLine("warn", fmt.Sprintf("unexpected CSA move during engine think: %q", csaEv.Move))
+			}
+		case <-ctx.Done():
+			abort()
 			return engineDecision{info: lastInfo}, ctx.Err()
 		}
 	}
