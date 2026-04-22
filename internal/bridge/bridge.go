@@ -74,6 +74,10 @@ func Run(ctx context.Context, opts Options) error {
 
 	infinite := cfg.Repeat == -1
 	remaining := cfg.Repeat
+	// gameCount persists across sessions so the "game N started/ended"
+	// log lines keep incrementing even when the CSA server drops us
+	// between games (common on v121 tournament servers).
+	gameCount := 0
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -85,7 +89,7 @@ func Run(ctx context.Context, opts Options) error {
 		if infinite {
 			budget = -1
 		}
-		played, err := runOneSession(ctx, opts, &engine, budget)
+		played, err := runOneSession(ctx, opts, &engine, budget, &gameCount)
 		if !infinite {
 			remaining -= played
 		}
@@ -118,8 +122,9 @@ func Run(ctx context.Context, opts Options) error {
 // runOneSession logs in, plays up to 'budget' games, then logs out. Returns
 // the number of games actually played and the terminating error (if any).
 // enginePtr is a pointer to the current engine pointer so the per-game
-// restart path can replace it in place.
-func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, budget int) (played int, err error) {
+// restart path can replace it in place. gameCount is a caller-owned
+// cross-session counter used only for labeling log lines.
+func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, budget int, gameCount *int) (played int, err error) {
 	cfg := opts.Config
 	client := csa.New(csa.Options{
 		Host:        cfg.Server.Host,
@@ -165,7 +170,10 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 		// clear marker for each game. Use ☗ (Black) / ☖ (White) piece
 		// symbols so the line stays short and readable in ASCII locales;
 		// game ID is truncated to 10 runes since Floodgate and WCSC IDs
-		// can be very long.
+		// can be very long. The counter is cross-session so it keeps
+		// incrementing through reconnects.
+		*gameCount++
+		gameNum := *gameCount
 		blackName := summary.Players[csa.Black].Name
 		whiteName := summary.Players[csa.White].Name
 		if blackName == "" {
@@ -175,7 +183,7 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 			whiteName = "-"
 		}
 		opts.UI.LogLine("info", fmt.Sprintf("game %d started: ☗ %s  ☖ %s (id=%s)",
-			played+1, blackName, whiteName, truncateRunes(summary.ID, 10)))
+			gameNum, blackName, whiteName, truncateRunes(summary.ID, 10)))
 
 		res, err := playOneGame(ctx, opts, *enginePtr, client, summary)
 		if err != nil {
@@ -187,7 +195,7 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 		if res.special != "" {
 			endLabel = res.result + " (" + res.special + ")"
 		}
-		opts.UI.LogLine("info", fmt.Sprintf("game %d ended: %s", played, endLabel))
+		opts.UI.LogLine("info", fmt.Sprintf("game %d ended: %s", gameNum, endLabel))
 		if cfg.SaveRecordFile {
 			if err := saveRecord(opts.RecordDir, cfg, summary, res); err != nil {
 				opts.Logger.Warn("save record: %v", err)
