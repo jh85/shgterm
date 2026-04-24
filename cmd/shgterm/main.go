@@ -48,6 +48,8 @@ func run() error {
 	repeat := flags.Int("repeat", 0, "override repeat count (-1 = infinite; stay logged in and play every scheduled game)")
 	continuous := flags.Bool("continuous", false, "shortcut for --repeat -1 (Floodgate / tournament mode)")
 	loginRetry := flags.Duration("login-retry", 30*time.Second, "delay before reconnecting after a session error (try 5s for v121 tournaments)")
+	readyTimeout := flags.Duration("engine-ready-timeout", 3*time.Minute, "maximum time to wait for the engine's readyok (NN engines with ONNX/CUDA init may need several minutes)")
+	handshakeTimeout := flags.Duration("engine-handshake-timeout", time.Minute, "maximum time to wait for the engine's usiok")
 	logDir := flags.String("log-dir", "logs", "directory for log files (empty disables file logging)")
 	recordDir := flags.String("record-dir", "records", "directory for saved game records")
 	ascii := flags.Bool("ascii", false, "render pieces as USI ASCII instead of kanji")
@@ -124,10 +126,12 @@ func run() error {
 	)
 
 	opts := bridge.Options{
-		Config:          cfg,
-		Logger:          slogAdapter{logger},
-		RecordDir:       *recordDir,
-		LoginRetryDelay: *loginRetry,
+		Config:           cfg,
+		Logger:           slogAdapter{logger},
+		RecordDir:        *recordDir,
+		LoginRetryDelay:  *loginRetry,
+		HandshakeTimeout: *handshakeTimeout,
+		ReadyTimeout:     *readyTimeout,
 	}
 
 	if *noTUI {

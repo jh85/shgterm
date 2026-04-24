@@ -39,6 +39,10 @@ type Options struct {
 	RecordDir string
 	// LoginRetryDelay is used when AutoRelogin is on. Default 30s.
 	LoginRetryDelay time.Duration
+	// HandshakeTimeout / ReadyTimeout override the corresponding usi
+	// defaults. Zero means "use the usi package default".
+	HandshakeTimeout time.Duration
+	ReadyTimeout     time.Duration
 }
 
 // Run is the main entry point. It blocks until the configured number of
@@ -59,7 +63,7 @@ func Run(ctx context.Context, opts Options) error {
 	}
 	cfg := opts.Config
 
-	engine, err := startAndHandshake(ctx, cfg, opts.Logger)
+	engine, err := startAndHandshake(ctx, cfg, opts.Logger, opts.HandshakeTimeout, opts.ReadyTimeout)
 	if err != nil {
 		return err
 	}
@@ -212,7 +216,7 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 			last := !infinite && played >= budget
 			if !last {
 				opts.UI.LogLine("info", "restarting engine (restartPlayerEveryGame=true)…")
-				newEngine, err := restartEngine(ctx, *enginePtr, cfg, opts.Logger)
+				newEngine, err := restartEngine(ctx, *enginePtr, cfg, opts.Logger, opts.HandshakeTimeout, opts.ReadyTimeout)
 				if err != nil {
 					return played, fmt.Errorf("restart engine: %w", err)
 				}
@@ -231,11 +235,13 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 // startAndHandshake spawns the engine process and performs the full USI
 // handshake (usi → usiok → setoption… → isready → readyok). On any error
 // after Start, the partially-started process is torn down.
-func startAndHandshake(ctx context.Context, cfg *config.Config, log Logger) (*usi.Engine, error) {
+func startAndHandshake(ctx context.Context, cfg *config.Config, log Logger, handshakeTimeout, readyTimeout time.Duration) (*usi.Engine, error) {
 	engine := usi.New(usi.Options{
-		Path:   cfg.USI.Path,
-		Name:   cfg.USI.Name,
-		Logger: engineLogger{log},
+		Path:             cfg.USI.Path,
+		Name:             cfg.USI.Name,
+		Logger:           engineLogger{log},
+		HandshakeTimeout: handshakeTimeout,
+		ReadyTimeout:     readyTimeout,
 	})
 	if err := engine.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start engine: %w", err)
@@ -252,13 +258,13 @@ func startAndHandshake(ctx context.Context, cfg *config.Config, log Logger) (*us
 // restartEngine tears down the supplied engine and replaces it with a
 // freshly-started one. The old engine is always torn down before we try
 // to build a new one so we don't end up with two live NN workers.
-func restartEngine(ctx context.Context, old *usi.Engine, cfg *config.Config, log Logger) (*usi.Engine, error) {
+func restartEngine(ctx context.Context, old *usi.Engine, cfg *config.Config, log Logger, handshakeTimeout, readyTimeout time.Duration) (*usi.Engine, error) {
 	quitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := old.Quit(quitCtx); err != nil {
 		log.Warn("old engine quit: %v", err)
 	}
-	return startAndHandshake(ctx, cfg, log)
+	return startAndHandshake(ctx, cfg, log, handshakeTimeout, readyTimeout)
 }
 
 // waitForGameSummary waits for LOGIN_OK (once) then EventGameSummary.

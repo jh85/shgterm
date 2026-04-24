@@ -79,10 +79,13 @@ func New(opts Options) *Engine {
 		opts.Logger = nopLogger{}
 	}
 	if opts.HandshakeTimeout == 0 {
-		opts.HandshakeTimeout = 30 * time.Second
+		opts.HandshakeTimeout = 60 * time.Second
 	}
 	if opts.ReadyTimeout == 0 {
-		opts.ReadyTimeout = 60 * time.Second
+		// NN engines (dlshogi-family, ONNX, CUDA init, mmap of large hash
+		// tables) can legitimately take a couple of minutes on first
+		// isready. 3 minutes matches shogihome's engine-timeout default.
+		opts.ReadyTimeout = 3 * time.Minute
 	}
 	if opts.QuitTimeout == 0 {
 		opts.QuitTimeout = 5 * time.Second
