@@ -170,28 +170,19 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 		if err != nil {
 			return played, err
 		}
-		// Game starting. Announce at info level so the log pane has a
-		// clear marker for each game. Use ☗ (Black) / ☖ (White) piece
-		// symbols so the line stays short and readable in ASCII locales;
-		// game ID is truncated to 10 runes since Floodgate and WCSC IDs
-		// can be very long. The counter is cross-session so it keeps
-		// incrementing through reconnects.
-		*gameCount++
-		gameNum := *gameCount
-		blackName := summary.Players[csa.Black].Name
-		whiteName := summary.Players[csa.White].Name
-		if blackName == "" {
-			blackName = "-"
-		}
-		if whiteName == "" {
-			whiteName = "-"
-		}
-		opts.UI.LogLine("info", fmt.Sprintf("game %d started: ☗ %s  ☖ %s (id=%s)",
-			gameNum, blackName, whiteName, truncateRunes(summary.ID, 10)))
 
-		res, err := playOneGame(ctx, opts, *enginePtr, client, summary)
+		res, err := playOneGame(ctx, opts, *enginePtr, client, summary, gameCount)
 		if err != nil {
 			return played, err
+		}
+		if res.rejected {
+			// Server cancelled the match before it could start (the
+			// opponent did not AGREE in time). The connection is still
+			// alive; just loop back and wait for the next proposal —
+			// no game number burned, no record saved.
+			opts.UI.LogLine("warn", fmt.Sprintf("match cancelled by server (id=%s) — opponent did not AGREE",
+				truncateRunes(summary.ID, 10)))
+			continue
 		}
 		played++
 		opts.UI.GameEnded(res.result, res.special)
@@ -199,7 +190,7 @@ func runOneSession(ctx context.Context, opts Options, enginePtr **usi.Engine, bu
 		if res.special != "" {
 			endLabel = res.result + " (" + res.special + ")"
 		}
-		opts.UI.LogLine("info", fmt.Sprintf("game %d ended: %s", gameNum, endLabel))
+		opts.UI.LogLine("info", fmt.Sprintf("game %d ended: %s", res.gameNumber, endLabel))
 		if cfg.SaveRecordFile {
 			if err := saveRecord(opts.RecordDir, cfg, summary, res); err != nil {
 				opts.Logger.Warn("save record: %v", err)
@@ -302,11 +293,17 @@ type gameResult struct {
 	endedAt        time.Time
 	initialPos     string
 	summary        *csa.GameSummary
+	gameNumber     int  // 1-based, set when START actually fires
+	rejected       bool // server REJECTed our AGREE; no game was played
 }
 
-// playOneGame drives one agreed game end-to-end. Returns once the server
-// sends a result code.
-func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *csa.Client, summary *csa.GameSummary) (gameResult, error) {
+// playOneGame drives one game end-to-end. It sends AGREE, awaits START,
+// and runs the move loop until the server emits a result code. If the
+// server REJECTs the AGREE (e.g. the opponent never agreed), it returns
+// with res.rejected = true and the connection is left open. gameCount is
+// incremented only when START actually fires, so cancelled proposals
+// don't burn a game number.
+func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *csa.Client, summary *csa.GameSummary, gameCount *int) (gameResult, error) {
 	res := gameResult{startedAt: time.Now(), initialPos: summary.Position, summary: summary}
 
 	pos, preMoves, err := shogi.ParseCSAWithMoves(summary.Position)
@@ -348,9 +345,33 @@ func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *
 	if err := client.Agree(summary.ID); err != nil {
 		return res, err
 	}
-	if err := waitForStart(ctx, client); err != nil {
+	rejected, err := waitForStart(ctx, client)
+	if err != nil {
 		return res, err
 	}
+	if rejected {
+		// The match was cancelled by the server before the game could
+		// start (typically because the opponent did not AGREE within
+		// the server's deadline). The CSA session is still alive — the
+		// caller can loop back to wait for the next proposal.
+		res.rejected = true
+		return res, nil
+	}
+
+	// START fired — this is now a real, played game. Burn a game number
+	// and emit the start log line.
+	*gameCount++
+	res.gameNumber = *gameCount
+	blackName := summary.Players[csa.Black].Name
+	whiteName := summary.Players[csa.White].Name
+	if blackName == "" {
+		blackName = "-"
+	}
+	if whiteName == "" {
+		whiteName = "-"
+	}
+	opts.UI.LogLine("info", fmt.Sprintf("game %d started: ☗ %s  ☖ %s (id=%s)",
+		res.gameNumber, blackName, whiteName, truncateRunes(summary.ID, 10)))
 
 	// The clock for whoever is on move starts running now.
 	opts.UI.SetTurnTimer(colorToCSA(pos.Turn), time.Now())
@@ -424,26 +445,29 @@ func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *
 	}
 }
 
-// waitForStart drains events until EventStart or a terminal condition.
-func waitForStart(ctx context.Context, client *csa.Client) error {
+// waitForStart drains events until EventStart, EventRejectedByServer, or
+// a terminal condition. It distinguishes a server REJECT (the opponent
+// did not AGREE in time, no game was played) from a real error: the
+// caller can keep the connection alive and wait for the next proposal.
+func waitForStart(ctx context.Context, client *csa.Client) (rejected bool, err error) {
 	for {
 		select {
 		case ev, ok := <-client.Events():
 			if !ok {
-				return errors.New("csa closed before START")
+				return false, errors.New("csa closed before START")
 			}
 			switch ev.Kind {
 			case csa.EventStart:
-				return nil
+				return false, nil
 			case csa.EventRejectedByServer:
-				return errors.New("server REJECTed our AGREE")
+				return true, nil
 			case csa.EventError:
-				return ev.Err
+				return false, ev.Err
 			case csa.EventClosed:
-				return errors.New("csa closed before START")
+				return false, errors.New("csa closed before START")
 			}
 		case <-ctx.Done():
-			return ctx.Err()
+			return false, ctx.Err()
 		}
 	}
 }
