@@ -231,24 +231,33 @@ func (e *Engine) send(cmd string) error {
 	return err
 }
 
-// Handshake performs "usi → usiok", sends setoption lines for opts, then
-// "isready → readyok". opts maps option names to string representations of
-// their values ("true"/"false" for checks, numeric string for spin, raw
-// string otherwise). Unknown options (not advertised by the engine) are
-// sent anyway — many engines accept them silently.
-func (e *Engine) Handshake(ctx context.Context, opts map[string]string) error {
+// Setoption is one (name, value) pair to be emitted as
+// "setoption name <Name> value <Value>" during Handshake. An empty Value
+// emits "setoption name <Name>" (button-type options). Order is
+// preserved as given — some engines react to setoptions immediately and
+// require a specific sequence (e.g. NumGPUs / OnnxModel before Threads).
+type Setoption struct {
+	Name  string
+	Value string
+}
+
+// Handshake performs "usi → usiok", sends setoption lines for opts in
+// the supplied order, then "isready → readyok". Unknown options (not
+// advertised by the engine) are sent anyway — many engines accept them
+// silently.
+func (e *Engine) Handshake(ctx context.Context, opts []Setoption) error {
 	if err := e.send("usi"); err != nil {
 		return err
 	}
 	if err := e.waitSignal(ctx, e.usiOKCh, e.opts.HandshakeTimeout, "usiok"); err != nil {
 		return err
 	}
-	for name, val := range opts {
+	for _, o := range opts {
 		var cmd string
-		if val == "" {
-			cmd = fmt.Sprintf("setoption name %s", name)
+		if o.Value == "" {
+			cmd = fmt.Sprintf("setoption name %s", o.Name)
 		} else {
-			cmd = fmt.Sprintf("setoption name %s value %s", name, val)
+			cmd = fmt.Sprintf("setoption name %s value %s", o.Name, o.Value)
 		}
 		if err := e.send(cmd); err != nil {
 			return err

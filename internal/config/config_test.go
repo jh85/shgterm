@@ -236,6 +236,84 @@ enableComment: false
 	}
 }
 
+func TestUSIOptionsPreserveOrder(t *testing.T) {
+	dir := t.TempDir()
+	writeTempEngine(t, dir)
+	yaml := `
+usi:
+  name: t
+  path: ./fake-engine
+  options:
+    NumGPUs:    {type: spin,   value: 8}
+    OnnxModel:  {type: string, value: /path/model.onnx}
+    Threads:    {type: spin,   value: 64}
+    MultiPV:    {type: spin,   value: 1}
+server:
+  protocolVersion: v121
+  host: h
+  port: 4081
+  id: i
+  password: p
+  tcpKeepalive: {initialDelay: 10}
+repeat: 1
+autoRelogin: false
+restartPlayerEveryGame: false
+saveRecordFile: false
+enableComment: false
+`
+	cfgPath := filepath.Join(dir, "c.yaml")
+	if err := os.WriteFile(cfgPath, []byte(yaml), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"NumGPUs", "OnnxModel", "Threads", "MultiPV"}
+	if got := cfg.USI.Options.Order; len(got) != len(want) {
+		t.Fatalf("Order length = %d, want %d", len(got), len(want))
+	}
+	for i, name := range want {
+		if cfg.USI.Options.Order[i] != name {
+			t.Errorf("Order[%d] = %q, want %q (full: %v)",
+				i, cfg.USI.Options.Order[i], name, cfg.USI.Options.Order)
+		}
+	}
+}
+
+func TestUSIOptionsPreserveOrderJSON(t *testing.T) {
+	dir := t.TempDir()
+	writeTempEngine(t, dir)
+	js := `{
+	  "usi": {
+	    "name": "t",
+	    "path": "./fake-engine",
+	    "options": {
+	      "NumGPUs":   {"type": "spin",   "value": 8},
+	      "OnnxModel": {"type": "string", "value": "/path/model.onnx"},
+	      "Threads":   {"type": "spin",   "value": 64}
+	    }
+	  },
+	  "server": {"protocolVersion": "v121", "host": "h", "port": 4081, "id": "i", "password": "p", "tcpKeepalive": {"initialDelay": 10}},
+	  "repeat": 1, "autoRelogin": false, "restartPlayerEveryGame": false, "saveRecordFile": false, "enableComment": false
+	}`
+	cfgPath := filepath.Join(dir, "c.json")
+	if err := os.WriteFile(cfgPath, []byte(js), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"NumGPUs", "OnnxModel", "Threads"}
+	for i, name := range want {
+		if cfg.USI.Options.Order[i] != name {
+			t.Errorf("Order[%d] = %q, want %q (full: %v)",
+				i, cfg.USI.Options.Order[i], name, cfg.USI.Options.Order)
+		}
+	}
+}
+
 func TestLegacySingleServerStillLoads(t *testing.T) {
 	dir := t.TempDir()
 	writeTempEngine(t, dir)

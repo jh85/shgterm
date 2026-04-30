@@ -246,7 +246,7 @@ func startAndHandshake(ctx context.Context, cfg *config.Config, log Logger, hand
 	if err := engine.Start(ctx); err != nil {
 		return nil, fmt.Errorf("start engine: %w", err)
 	}
-	if err := engine.Handshake(ctx, usiOptionMap(cfg.USI.Options)); err != nil {
+	if err := engine.Handshake(ctx, usiOptionList(cfg.USI.Options)); err != nil {
 		quitCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		_ = engine.Quit(quitCtx)
@@ -662,32 +662,38 @@ func mapGameResultForEngine(csaResult string, my csa.PlayerColor) string {
 	}
 }
 
-func usiOptionMap(opts map[string]config.USIOption) map[string]string {
-	out := make(map[string]string, len(opts))
-	for name, o := range opts {
+// usiOptionList converts a config.USIOptions block (which preserves
+// document order) into the ordered slice that engine.Handshake expects.
+// Some engines require setoptions in a specific sequence; the user's YAML
+// order is the contract.
+func usiOptionList(opts config.USIOptions) []usi.Setoption {
+	out := make([]usi.Setoption, 0, opts.Len())
+	for _, name := range opts.Order {
+		o := opts.Map[name]
+		var val string
 		switch v := o.Value.(type) {
 		case bool:
 			if v {
-				out[name] = "true"
+				val = "true"
 			} else {
-				out[name] = "false"
+				val = "false"
 			}
 		case int:
-			out[name] = strconv.Itoa(v)
+			val = strconv.Itoa(v)
 		case int64:
-			out[name] = strconv.FormatInt(v, 10)
+			val = strconv.FormatInt(v, 10)
 		case float64:
-			// YAML numbers come in as float64 by default.
 			if o.Type == "spin" || o.Type == "check" {
-				out[name] = strconv.FormatInt(int64(v), 10)
+				val = strconv.FormatInt(int64(v), 10)
 			} else {
-				out[name] = strconv.FormatFloat(v, 'f', -1, 64)
+				val = strconv.FormatFloat(v, 'f', -1, 64)
 			}
 		case string:
-			out[name] = v
+			val = v
 		default:
-			out[name] = fmt.Sprint(v)
+			val = fmt.Sprint(v)
 		}
+		out = append(out, usi.Setoption{Name: name, Value: val})
 	}
 	return out
 }

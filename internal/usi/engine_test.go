@@ -26,7 +26,10 @@ func TestHandshakeAndGo(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = e.Quit(context.Background()) })
 
-	if err := e.Handshake(ctx, map[string]string{"USI_Hash": "64", "MultiPV": "1"}); err != nil {
+	if err := e.Handshake(ctx, []Setoption{
+		{Name: "USI_Hash", Value: "64"},
+		{Name: "MultiPV", Value: "1"},
+	}); err != nil {
 		t.Fatalf("handshake: %v", err)
 	}
 	if e.IDName() != "FakeEngine" {

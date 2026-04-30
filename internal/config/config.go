@@ -6,6 +6,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -42,11 +43,94 @@ type USIOption struct {
 	Value any    `yaml:"value" json:"value"`
 }
 
+// USIOptions preserves the document order of the options: block. Some
+// engines react to a setoption immediately (spawning threads, allocating
+// GPU buffers, etc.), so getting Threads, OnnxModel, NumGPUs etc. into
+// the right sequence matters. Go's map iteration is randomized; this
+// type captures the YAML/JSON insertion order via custom unmarshallers.
+type USIOptions struct {
+	Order []string             // names in document order
+	Map   map[string]USIOption // for lookup
+}
+
+// UnmarshalYAML decodes a mapping node, recording the keys in their
+// source order.
+func (o *USIOptions) UnmarshalYAML(node *yaml.Node) error {
+	if node == nil {
+		o.Order = nil
+		o.Map = nil
+		return nil
+	}
+	if node.Kind != yaml.MappingNode {
+		return fmt.Errorf("usi.options must be a mapping (got kind %d)", node.Kind)
+	}
+	o.Order = nil
+	o.Map = make(map[string]USIOption, len(node.Content)/2)
+	for i := 0; i+1 < len(node.Content); i += 2 {
+		keyNode := node.Content[i]
+		valNode := node.Content[i+1]
+		var opt USIOption
+		if err := valNode.Decode(&opt); err != nil {
+			return fmt.Errorf("usi.options[%q]: %w", keyNode.Value, err)
+		}
+		o.Order = append(o.Order, keyNode.Value)
+		o.Map[keyNode.Value] = opt
+	}
+	return nil
+}
+
+// UnmarshalJSON parses the object using a streaming decoder so it can
+// preserve key order — encoding/json's default behaviour for maps does
+// not.
+func (o *USIOptions) UnmarshalJSON(data []byte) error {
+	o.Order = nil
+	o.Map = make(map[string]USIOption)
+
+	dec := json.NewDecoder(bytes.NewReader(data))
+	tok, err := dec.Token()
+	if err != nil {
+		return err
+	}
+	if d, ok := tok.(json.Delim); !ok || d != '{' {
+		return fmt.Errorf("usi.options: expected '{', got %v", tok)
+	}
+	for dec.More() {
+		keyTok, err := dec.Token()
+		if err != nil {
+			return err
+		}
+		key, ok := keyTok.(string)
+		if !ok {
+			return fmt.Errorf("usi.options: expected string key, got %T", keyTok)
+		}
+		var opt USIOption
+		if err := dec.Decode(&opt); err != nil {
+			return fmt.Errorf("usi.options[%q]: %w", key, err)
+		}
+		o.Order = append(o.Order, key)
+		o.Map[key] = opt
+	}
+	if _, err := dec.Token(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// Each calls fn(name, opt) for each option in document order.
+func (o *USIOptions) Each(fn func(name string, opt USIOption)) {
+	for _, name := range o.Order {
+		fn(name, o.Map[name])
+	}
+}
+
+// Len reports the number of options.
+func (o *USIOptions) Len() int { return len(o.Order) }
+
 type USIEngine struct {
-	Name              string               `yaml:"name" json:"name"`
-	Path              string               `yaml:"path" json:"path"`
-	Options           map[string]USIOption `yaml:"options" json:"options"`
-	EnableEarlyPonder bool                 `yaml:"enableEarlyPonder" json:"enableEarlyPonder"`
+	Name              string     `yaml:"name" json:"name"`
+	Path              string     `yaml:"path" json:"path"`
+	Options           USIOptions `yaml:"options" json:"options"`
+	EnableEarlyPonder bool       `yaml:"enableEarlyPonder" json:"enableEarlyPonder"`
 }
 
 type TCPKeepalive struct {
@@ -184,7 +268,8 @@ func (c *Config) Validate() error {
 	if c.Repeat != -1 && c.Repeat < 1 {
 		return fmt.Errorf("repeat must be -1 (infinite) or >= 1 (got %d)", c.Repeat)
 	}
-	for name, opt := range c.USI.Options {
+	for _, name := range c.USI.Options.Order {
+		opt := c.USI.Options.Map[name]
 		switch opt.Type {
 		case "check", "spin", "string", "combo", "filename":
 		default:
