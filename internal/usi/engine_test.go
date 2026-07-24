@@ -35,8 +35,8 @@ func TestHandshakeAndGo(t *testing.T) {
 	if e.IDName() != "FakeEngine" {
 		t.Fatalf("id name = %q", e.IDName())
 	}
-	if err := e.NewGame(); err != nil {
-		t.Fatalf("newgame: %v", err)
+	if err := e.PrepareNewGame(ctx); err != nil {
+		t.Fatalf("prepare new game: %v", err)
 	}
 
 	ch, err := e.Go(ctx, "position startpos", TimeControl{BTime: 60000, WTime: 60000, Byoyomi: 10000})

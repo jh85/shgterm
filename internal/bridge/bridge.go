@@ -337,8 +337,8 @@ func playOneGame(ctx context.Context, opts Options, engine *usi.Engine, client *
 	}
 	opts.UI.SetClock(clock[csa.Black], clock[csa.White], unit)
 
-	if err := engine.NewGame(); err != nil {
-		return res, fmt.Errorf("usinewgame: %w", err)
+	if err := engine.PrepareNewGame(ctx); err != nil {
+		return res, fmt.Errorf("prepare new game: %w", err)
 	}
 
 	// AGREE and wait for START.

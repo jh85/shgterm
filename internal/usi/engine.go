@@ -292,6 +292,16 @@ func (e *Engine) waitSignal(ctx context.Context, ch <-chan struct{}, timeout tim
 // NewGame sends "usinewgame".
 func (e *Engine) NewGame() error { return e.send("usinewgame") }
 
+// PrepareNewGame gives the engine an acknowledged preparation window before
+// sending usinewgame. Shogi engines may use isready/readyok to clear large
+// per-game search caches without charging that work to the first move clock.
+func (e *Engine) PrepareNewGame(ctx context.Context) error {
+	if err := e.Ready(ctx); err != nil {
+		return err
+	}
+	return e.NewGame()
+}
+
 // Gameover sends "gameover win|lose|draw".
 func (e *Engine) Gameover(result string) error {
 	return e.send("gameover " + result)
